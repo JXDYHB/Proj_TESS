@@ -21,11 +21,11 @@ def kipping_q_to_u(q1, q2):
 
 
 def build_model_mcmc(
-    sectors,
     sector_data,
     tic=120.0,
     P_fixed=9.477,
     window=0.5,
+    sectors=None,  # sectors 是可选参数
     max_windows_per_sector=2,
     prom_sigma=3.0,
     distance_cap=1000,
@@ -59,6 +59,10 @@ def build_model_mcmc(
         jax.config.update("jax_enable_x64", True)
     numpyro.set_platform(platform)
     print("JAX devices:", jax.devices())
+
+    # 如果没有传入sectors，则默认为所有的sector
+    if sectors is None:
+        sectors = list(sector_data.keys())  # 假设sector_data的键是sector编号
 
     windows = collect_windows(
         sectors=sectors,

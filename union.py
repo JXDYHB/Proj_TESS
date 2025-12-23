@@ -2,10 +2,9 @@
 from download import download_sector
 from model_build import build_model_mcmc
 
-
 def run_union(
     tic_id,
-    sectors,
+    sectors=None,  # sectors 是可选的
     tic=120.0,
     author="SPOC",
     P_fixed=9.477,
@@ -39,21 +38,32 @@ def run_union(
     Download -> window selection -> MCMC.
     Returns a dict usable by plot.plot_results(**out, ...).
     """
-    sectors = [int(s) for s in sectors]
 
     data_all = download_sector(int(tic_id), author=author)
+
+    # 如果sectors为None，选择所有的sector
+    if sectors is None:
+        sectors = list(set(int(sec) for sec, _ in data_all.keys()))  # 从download_sector获取所有唯一的sector编号
+
+    sectors = [int(s) for s in sectors]  # 确保sectors是整数列表
+
+    # 打印下载的所有sector，确认包含了sector 28
+    print(f"Available sectors: {sectors}")
 
     sector_data = {}
     for (sec, exptime), lc in data_all.items():
         if int(sec) in sectors and float(exptime) == float(tic):
             sector_data[(int(sec), float(exptime))] = lc
 
+    # 打印筛选后的sector数据
+    print(f"Selected sector data: {sector_data.keys()}")
+
     windows, mcmc, samples, idata, summary = build_model_mcmc(
-        sectors=sectors,
         sector_data=sector_data,
         tic=float(tic),
         P_fixed=float(P_fixed),
         window=float(window),
+        sectors=sectors,  # 传递sectors
         max_windows_per_sector=int(max_windows_per_sector),
         prom_sigma=float(prom_sigma),
         distance_cap=int(distance_cap),

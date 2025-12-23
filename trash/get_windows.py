@@ -2,7 +2,6 @@
 import numpy as np
 from scipy.signal import find_peaks
 
-import numpy as np
 
 def cut_transit_window(
     time,
@@ -14,56 +13,35 @@ def cut_transit_window(
     inner_frac=0.5,
 ):
     """
-    Extract and vet a candidate transit window centered at `t_center`.
+    Cut and vet a candidate transit window centered at t_center.
 
-    Adds a simple "consecutive dip points" requirement to suppress single-point outliers:
-    within the central region |t| < inner_frac*window, require at least `min_consecutive`
-    consecutive points with flux < baseline - dip_sigma*sigma.
+    The window is accepted only if it shows:
+      - sufficient depth SNR,
+      - multiple consecutive in-transit points,
+      - approximate left-right symmetry.
 
-    Parameters
-    ----------
-    time, flux : array_like
-        Time and flux arrays.
-    t_center : float
-        Candidate center time.
-    window : float
-        Half-window size around t_center.
-    min_consecutive : int
-        Minimum number of consecutive in-transit-like points required.
-    dip_sigma : float
-        Dip threshold in units of sigma below baseline.
-    inner_frac : float
-        Only enforce the consecutive dip test within |t| < inner_frac*window.
-
-    Returns
-    -------
-    dict or None
+    Returns a dict of windowed data if accepted, otherwise None.
     """
-    # ------------------
-    # basic cut
-    # ------------------
+    # window cut
     mask = np.abs(time - t_center) < window
     t = np.asarray(time[mask], float)
     f_raw = np.asarray(flux[mask], float)
-
     if len(t) < 30:
         return None
 
+    # normalization
     baseline = np.median(f_raw)
     if not np.isfinite(baseline) or baseline == 0:
         return None
-
     f = f_raw / baseline
     t = t - t_center
 
-    # sort by time (important for "consecutive" logic)
+    # sort for consecutive-point logic
     sidx = np.argsort(t)
     t = t[sidx]
     f = f[sidx]
 
-    # ------------------
-    # noise estimate (from edges)
-    # ------------------
+    # noise estimate from window edges
     abs_t = np.abs(t)
     edge_mask = abs_t > 0.7 * abs_t.max()
     if np.sum(edge_mask) < 10:
@@ -74,13 +52,10 @@ def cut_transit_window(
     sigma = 1.4826 * mad
     if not np.isfinite(sigma) or sigma <= 0:
         sigma = np.std(f_edge)
-
     if not np.isfinite(sigma) or sigma <= 0:
         return None
 
-    # ------------------
-    # NEW: consecutive dip requirement (Method 1)
-    # ------------------
+    # require multiple consecutive in-transit points near center
     inner_mask = abs_t < (inner_frac * window)
     if np.sum(inner_mask) < max(10, min_consecutive):
         return None
@@ -89,31 +64,22 @@ def cut_transit_window(
     thresh = base - dip_sigma * sigma
     dip = (f < thresh) & inner_mask
 
-    # max run length of consecutive True in `dip`
     max_run = 0
     run = 0
     for v in dip:
-        if v:
-            run += 1
-            if run > max_run:
-                max_run = run
-        else:
-            run = 0
+        run = run + 1 if v else 0
+        max_run = max(max_run, run)
 
     if max_run < min_consecutive:
         return None
 
-    # ------------------
-    # depth SNR (now less likely to be single-point-driven)
-    # ------------------
+    # depth SNR
     depth = base - np.min(f)
     snr = depth / sigma
     if snr < 5.0:
         return None
 
-    # ------------------
     # symmetry check
-    # ------------------
     tau_pos = t[t > 0]
     tau_neg = t[t < 0]
     if len(tau_pos) < 10 or len(tau_neg) < 10:
@@ -127,7 +93,6 @@ def cut_transit_window(
 
     mse = np.mean((f_r - f_l) ** 2)
     score = np.exp(-mse / (2 * sigma * sigma))
-
     if score < 0.6:
         return None
 
@@ -142,10 +107,14 @@ def cut_transit_window(
     )
 
 
-
 def collect_windows(sectors, sector_data, tic=120, window=0.5, max_windows_per_sector=2):
     """
-    sector_data: dict-like, key=(sector, tic), value=LightCurve
+    Identify and extract transit-like windows from multiple sectors.
+
+    Parameters
+    ----------
+    sector_data : dict
+        Mapping (sector, tic) -> LightCurve.
     """
     windows = []
 
@@ -158,15 +127,14 @@ def collect_windows(sectors, sector_data, tic=120, window=0.5, max_windows_per_s
 
         good = np.isfinite(time) & np.isfinite(flux)
         time, flux = time[good], flux[good]
-
         if len(time) < 100:
             continue
 
-        # clip outliers
+        # clip extreme outliers
         lo, hi = np.nanpercentile(flux, [0.1, 99.9])
         flux = np.clip(flux, lo, hi)
 
-        # find dips
+        # detect candidate dips
         inv_flux = 1.0 - flux
         sigma = np.std(inv_flux)
         dist_min = min(1000, len(inv_flux) // 2)
@@ -176,11 +144,10 @@ def collect_windows(sectors, sector_data, tic=120, window=0.5, max_windows_per_s
             prominence=3 * sigma,
             distance=dist_min
         )
-
         if len(peaks) == 0:
             continue
 
-        # strongest dips first
+        # test strongest dips first
         order = np.argsort(props["prominences"])[::-1]
         peaks = peaks[order][:max_windows_per_sector]
 
